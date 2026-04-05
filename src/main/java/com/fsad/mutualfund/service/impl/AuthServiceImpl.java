@@ -1,19 +1,37 @@
 package com.fsad.mutualfund.service.impl;
 
-import com.fsad.mutualfund.dto.*;
-import com.fsad.mutualfund.entity.InvestorProfile;
+import com.fsad.mutualfund.dto.AuthResponse;
+import com.fsad.mutualfund.dto.GoogleLoginRequest;
+import com.fsad.mutualfund.dto.GoogleTokenPayload;
+import com.fsad.mutualfund.dto.LoginRequest;
+import com.fsad.mutualfund.dto.RegisterRequest;
 import com.fsad.mutualfund.entity.AdvisorProfile;
+import com.fsad.mutualfund.entity.InvestorProfile;
 import com.fsad.mutualfund.entity.User;
-import com.fsad.mutualfund.repository.UserRepository;
-import com.fsad.mutualfund.repository.InvestorProfileRepository;
 import com.fsad.mutualfund.repository.AdvisorProfileRepository;
+import com.fsad.mutualfund.repository.InvestorProfileRepository;
+import com.fsad.mutualfund.repository.UserRepository;
 import com.fsad.mutualfund.security.JwtUtil;
 import com.fsad.mutualfund.service.AuthService;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.security.GeneralSecurityException;
+import java.util.Collections;
 
 @Service
 public class AuthServiceImpl implements AuthService {
@@ -23,17 +41,22 @@ public class AuthServiceImpl implements AuthService {
     private final AdvisorProfileRepository advisorProfileRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
+    private final String googleClientId;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final HttpClient httpClient = HttpClient.newHttpClient();
 
     public AuthServiceImpl(UserRepository userRepository,
                            InvestorProfileRepository investorProfileRepository,
                            AdvisorProfileRepository advisorProfileRepository,
                            PasswordEncoder passwordEncoder,
-                           JwtUtil jwtUtil) {
+                           JwtUtil jwtUtil,
+                           @Value("${app.google.client-id}") String googleClientId) {
         this.userRepository = userRepository;
         this.investorProfileRepository = investorProfileRepository;
         this.advisorProfileRepository = advisorProfileRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtUtil = jwtUtil;
+        this.googleClientId = googleClientId;
     }
 
     @Override
@@ -77,8 +100,6 @@ public class AuthServiceImpl implements AuthService {
                 .build();
 
         user = userRepository.save(user);
-
-        // Create role-specific profile
         createRoleProfile(user, role);
 
         String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name(), user.getId());
@@ -88,18 +109,12 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public AuthResponse googleLogin(GoogleLoginRequest request) {
-        // In production, verify the Google ID token here using Google API Client.
-        // For this implementation, we'll simulate by extracting email from the token.
-        // NOTE: Replace with actual Google token verification in production.
+        GoogleTokenPayload googleUser = verifyGoogleToken(request.getIdToken());
 
-        // Simulated extraction — in production use GoogleIdTokenVerifier
-        String email = "google.user@gmail.com"; // Placeholder
-        String fullName = "Google User";
-
-        User user = userRepository.findByEmail(email).orElseGet(() -> {
+        User user = userRepository.findByEmail(googleUser.email()).orElseGet(() -> {
             User newUser = User.builder()
-                    .email(email)
-                    .fullName(fullName)
+                    .email(googleUser.email())
+                    .fullName(googleUser.fullName())
                     .role(User.Role.INVESTOR)
                     .authProvider(User.AuthProvider.GOOGLE)
                     .verified(true)
@@ -113,8 +128,104 @@ public class AuthServiceImpl implements AuthService {
             throw new RuntimeException("This account has been suspended. Contact support or an administrator.");
         }
 
+        if (user.getAuthProvider() == User.AuthProvider.LOCAL && user.getPassword() != null) {
+            throw new RuntimeException("An account with this email already exists. Please sign in with your password.");
+        }
+
         String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name(), user.getId());
         return buildAuthResponse(user, token);
+    }
+
+    private GoogleTokenPayload verifyGoogleToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new RuntimeException("Google credential is required");
+        }
+
+        if (token.contains(".")) {
+            return verifyGoogleIdToken(token);
+        }
+
+        return verifyGoogleAccessToken(token);
+    }
+
+    private GoogleTokenPayload verifyGoogleIdToken(String idToken) {
+        if (googleClientId == null || googleClientId.isBlank() || googleClientId.contains("your-google-client-id")) {
+            throw new RuntimeException("Google authentication is not configured on the server");
+        }
+
+        try {
+            GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
+                    GoogleNetHttpTransport.newTrustedTransport(),
+                    GsonFactory.getDefaultInstance()
+            )
+                    .setAudience(Collections.singletonList(googleClientId))
+                    .build();
+
+            GoogleIdToken googleIdToken = verifier.verify(idToken);
+            if (googleIdToken == null) {
+                throw new RuntimeException("Invalid Google credential");
+            }
+
+            GoogleIdToken.Payload payload = googleIdToken.getPayload();
+            String email = payload.getEmail();
+            String fullName = (String) payload.get("name");
+            Object emailVerified = payload.get("email_verified");
+
+            if (email == null || email.isBlank()) {
+                throw new RuntimeException("Google account email is unavailable");
+            }
+
+            if (!(emailVerified instanceof Boolean verified) || !verified) {
+                throw new RuntimeException("Google account email is not verified");
+            }
+
+            if (fullName == null || fullName.isBlank()) {
+                int atIndex = email.indexOf('@');
+                fullName = atIndex > 0 ? email.substring(0, atIndex) : email;
+            }
+
+            return new GoogleTokenPayload(email, fullName);
+        } catch (GeneralSecurityException | IOException e) {
+            throw new RuntimeException("Unable to verify Google credential", e);
+        }
+    }
+
+    private GoogleTokenPayload verifyGoogleAccessToken(String accessToken) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://openidconnect.googleapis.com/v1/userinfo"))
+                    .header("Authorization", "Bearer " + accessToken)
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("Invalid Google access token");
+            }
+
+            JsonNode payload = objectMapper.readTree(response.body());
+            String email = payload.path("email").asText(null);
+            String fullName = payload.path("name").asText(null);
+            boolean emailVerified = payload.path("email_verified").asBoolean(false);
+
+            if (email == null || email.isBlank()) {
+                throw new RuntimeException("Google account email is unavailable");
+            }
+
+            if (!emailVerified) {
+                throw new RuntimeException("Google account email is not verified");
+            }
+
+            if (fullName == null || fullName.isBlank()) {
+                int atIndex = email.indexOf('@');
+                fullName = atIndex > 0 ? email.substring(0, atIndex) : email;
+            }
+
+            return new GoogleTokenPayload(email, fullName);
+        } catch (IOException | InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Unable to verify Google credential", e);
+        }
     }
 
     private void createRoleProfile(User user, User.Role role) {
@@ -123,7 +234,7 @@ public class AuthServiceImpl implements AuthService {
                     .user(user)
                     .riskToleranceScore(0)
                     .riskCategory(InvestorProfile.RiskCategory.MODERATE)
-                    .walletBalance(new BigDecimal("100000.0000")) // Starting balance for demo
+                    .walletBalance(new BigDecimal("100000.0000"))
                     .build();
             investorProfileRepository.save(profile);
         } else if (role == User.Role.ADVISOR) {
