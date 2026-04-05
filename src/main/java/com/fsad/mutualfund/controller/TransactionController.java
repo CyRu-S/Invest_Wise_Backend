@@ -2,8 +2,10 @@ package com.fsad.mutualfund.controller;
 
 import com.fsad.mutualfund.dto.ApiResponse;
 import com.fsad.mutualfund.dto.TransactionRequest;
+import com.fsad.mutualfund.entity.MutualFund;
 import com.fsad.mutualfund.entity.PortfolioHolding;
 import com.fsad.mutualfund.entity.Transaction;
+import com.fsad.mutualfund.repository.MutualFundRepository;
 import com.fsad.mutualfund.security.JwtUtil;
 import com.fsad.mutualfund.service.TransactionService;
 import jakarta.validation.Valid;
@@ -12,6 +14,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -23,10 +26,14 @@ public class TransactionController {
 
     private final TransactionService transactionService;
     private final JwtUtil jwtUtil;
+    private final MutualFundRepository mutualFundRepository;
 
-    public TransactionController(TransactionService transactionService, JwtUtil jwtUtil) {
+    public TransactionController(TransactionService transactionService,
+                                 JwtUtil jwtUtil,
+                                 MutualFundRepository mutualFundRepository) {
         this.transactionService = transactionService;
         this.jwtUtil = jwtUtil;
+        this.mutualFundRepository = mutualFundRepository;
     }
 
     @PostMapping("/buy")
@@ -53,14 +60,9 @@ public class TransactionController {
         Long userId = extractUserId(authHeader);
         List<Transaction> transactions = transactionService.getTransactionHistory(userId);
 
-        List<Map<String, Object>> result = transactions.stream().map(tx -> Map.<String, Object>of(
-                "id", tx.getId(),
-                "type", tx.getType().name(),
-                "amount", tx.getAmount(),
-                "status", tx.getStatus().name(),
-                "description", tx.getDescription() != null ? tx.getDescription() : "",
-                "createdAt", tx.getCreatedAt().toString()
-        )).collect(Collectors.toList());
+        List<Map<String, Object>> result = transactions.stream()
+                .map(this::toTransactionMap)
+                .collect(Collectors.toList());
 
         return ResponseEntity.ok(result);
     }
@@ -88,5 +90,64 @@ public class TransactionController {
     private Long extractUserId(String authHeader) {
         String token = authHeader.replace("Bearer ", "");
         return jwtUtil.getUserIdFromToken(token);
+    }
+
+    private Map<String, Object> toTransactionMap(Transaction tx) {
+        MutualFund fund = resolveFund(tx.getReferenceId());
+        String category = mapCategory(tx, fund);
+        String cashflowType = mapCashflowType(tx.getType());
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", tx.getId());
+        payload.put("type", tx.getType().name());
+        payload.put("cashflowType", cashflowType);
+        payload.put("category", category);
+        payload.put("amount", tx.getAmount());
+        payload.put("status", tx.getStatus().name());
+        payload.put("description", tx.getDescription() != null ? tx.getDescription() : "");
+        payload.put("createdAt", tx.getCreatedAt().toString());
+        payload.put("referenceId", tx.getReferenceId() != null ? tx.getReferenceId() : "");
+        payload.put("title", mapTitle(tx.getType()));
+        payload.put("fundName", fund != null ? fund.getFundName() : "");
+        payload.put("tickerSymbol", fund != null ? fund.getTickerSymbol() : "");
+        return payload;
+    }
+
+    private MutualFund resolveFund(String referenceId) {
+        if (referenceId == null || !referenceId.startsWith("FUND-")) {
+            return null;
+        }
+
+        try {
+            Long fundId = Long.parseLong(referenceId.substring("FUND-".length()));
+            return mutualFundRepository.findById(fundId).orElse(null);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private String mapCashflowType(Transaction.TransactionType type) {
+        return switch (type) {
+            case DEPOSIT, SELL -> "INCOME";
+            case BUY, FEE_PAYMENT -> "EXPENSE";
+        };
+    }
+
+    private String mapCategory(Transaction tx, MutualFund fund) {
+        return switch (tx.getType()) {
+            case DEPOSIT -> "Wallet Funding";
+            case BUY -> fund != null ? fund.getCategory().name() + " Investment" : "Investment";
+            case SELL -> fund != null ? fund.getCategory().name() + " Redemption" : "Redemption";
+            case FEE_PAYMENT -> "Advisor Fees";
+        };
+    }
+
+    private String mapTitle(Transaction.TransactionType type) {
+        return switch (type) {
+            case DEPOSIT -> "Wallet Top-up";
+            case BUY -> "Fund Purchase";
+            case SELL -> "Fund Redemption";
+            case FEE_PAYMENT -> "Advisor Fee";
+        };
     }
 }
