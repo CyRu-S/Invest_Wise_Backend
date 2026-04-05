@@ -2,8 +2,10 @@ package com.fsad.mutualfund.service.impl;
 
 import com.fsad.mutualfund.dto.RiskQuestionnaireRequest;
 import com.fsad.mutualfund.entity.InvestorProfile;
+import com.fsad.mutualfund.entity.Transaction;
 import com.fsad.mutualfund.entity.User;
 import com.fsad.mutualfund.repository.InvestorProfileRepository;
+import com.fsad.mutualfund.repository.TransactionRepository;
 import com.fsad.mutualfund.repository.UserRepository;
 import com.fsad.mutualfund.service.InvestorService;
 import org.springframework.stereotype.Service;
@@ -17,11 +19,14 @@ public class InvestorServiceImpl implements InvestorService {
 
     private final InvestorProfileRepository profileRepository;
     private final UserRepository userRepository;
+    private final TransactionRepository transactionRepository;
 
     public InvestorServiceImpl(InvestorProfileRepository profileRepository,
-                               UserRepository userRepository) {
+                               UserRepository userRepository,
+                               TransactionRepository transactionRepository) {
         this.profileRepository = profileRepository;
         this.userRepository = userRepository;
+        this.transactionRepository = transactionRepository;
     }
 
     @Override
@@ -70,6 +75,20 @@ public class InvestorServiceImpl implements InvestorService {
 
         InvestorProfile profile = getProfile(userId);
         profile.setWalletBalance(profile.getWalletBalance().add(amount));
-        return profileRepository.save(profile);
+        InvestorProfile updated = profileRepository.save(profile);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        transactionRepository.save(Transaction.builder()
+                .user(user)
+                .type(Transaction.TransactionType.DEPOSIT)
+                .amount(amount)
+                .status(Transaction.TransactionStatus.SUCCESS)
+                .referenceId("WALLET-" + System.currentTimeMillis())
+                .description("Wallet top-up completed")
+                .build());
+
+        return updated;
     }
 }

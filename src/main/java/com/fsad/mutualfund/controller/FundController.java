@@ -48,9 +48,9 @@ public class FundController {
         return ResponseEntity.ok(fundService.updateFund(id, fund));
     }
 
-    // Admin: Delete a fund
+    // Admin/Analyst: Delete a fund
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'ANALYST')")
     public ResponseEntity<Void> deleteFund(@PathVariable Long id) {
         fundService.deleteFund(id);
         return ResponseEntity.noContent().build();

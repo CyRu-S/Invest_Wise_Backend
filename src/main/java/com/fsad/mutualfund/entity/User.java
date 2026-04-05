@@ -37,6 +37,10 @@ public class User {
     @Column(name = "is_verified")
     private boolean verified = false;
 
+    @Builder.Default
+    @Column(name = "is_suspended")
+    private boolean suspended = false;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
 public class FundServiceImpl implements FundService {
 
     private static final BigDecimal RISK_FREE_RATE = new BigDecimal("0.06"); // 6% annual
+    private static final int SEEDED_HISTORY_POINTS = 12;
+    private static final BigDecimal MIN_NAV_VALUE = new BigDecimal("0.0100");
 
     private final MutualFundRepository fundRepository;
     private final NavHistoryRepository navHistoryRepository;
@@ -59,6 +61,9 @@ public class FundServiceImpl implements FundService {
 
         List<NavHistory> history = navHistoryRepository
                 .findByMutualFundIdOrderByNavDateAsc(fundId);
+        if (history.isEmpty()) {
+            history = buildSyntheticNavHistory(fund);
+        }
 
         // Build analytics
         BigDecimal cagr = BigDecimal.ZERO;
@@ -117,6 +122,7 @@ public class FundServiceImpl implements FundService {
     @Transactional
     public FundResponse createFund(MutualFund fund) {
         MutualFund saved = fundRepository.save(fund);
+        syncNavHistory(saved);
         return toFundResponse(saved);
     }
 
@@ -137,6 +143,7 @@ public class FundServiceImpl implements FundService {
         fund.setMinInvestment(fundData.getMinInvestment());
 
         MutualFund updated = fundRepository.save(fund);
+        syncNavHistory(updated);
         return toFundResponse(updated);
     }
 
@@ -176,5 +183,79 @@ public class FundServiceImpl implements FundService {
                 .description(fund.getDescription())
                 .minInvestment(fund.getMinInvestment())
                 .build();
+    }
+
+    private void syncNavHistory(MutualFund fund) {
+        BigDecimal nav = sanitizeNav(fund.getCurrentNav());
+        if (nav == null) {
+            return;
+        }
+
+        List<NavHistory> existingHistory = navHistoryRepository.findByMutualFundIdOrderByNavDateAsc(fund.getId());
+        if (existingHistory.isEmpty()) {
+            navHistoryRepository.saveAll(buildSyntheticNavHistory(fund));
+            return;
+        }
+
+        LocalDate today = LocalDate.now();
+        NavHistory todayPoint = navHistoryRepository.findByMutualFundIdAndNavDate(fund.getId(), today)
+                .orElse(null);
+
+        if (todayPoint != null) {
+            todayPoint.setNavValue(nav);
+            navHistoryRepository.save(todayPoint);
+            return;
+        }
+
+        navHistoryRepository.save(NavHistory.builder()
+                .mutualFund(fund)
+                .navDate(today)
+                .navValue(nav)
+                .build());
+    }
+
+    private List<NavHistory> buildSyntheticNavHistory(MutualFund fund) {
+        BigDecimal currentNav = sanitizeNav(fund.getCurrentNav());
+        if (currentNav == null) {
+            return new ArrayList<>();
+        }
+
+        int risk = Math.max(1, Math.min(fund.getRiskRating(), 5));
+        BigDecimal startFactor = new BigDecimal("0.88")
+                .add(new BigDecimal(risk).multiply(new BigDecimal("0.01")));
+        BigDecimal startNav = currentNav.multiply(startFactor).setScale(4, RoundingMode.HALF_UP);
+        BigDecimal delta = currentNav.subtract(startNav);
+
+        List<NavHistory> points = new ArrayList<>();
+        LocalDate today = LocalDate.now();
+
+        for (int index = 0; index < SEEDED_HISTORY_POINTS; index++) {
+            double progress = SEEDED_HISTORY_POINTS == 1 ? 1 : (double) index / (SEEDED_HISTORY_POINTS - 1);
+            BigDecimal trendValue = startNav.add(delta.multiply(BigDecimal.valueOf(progress)));
+            double waveFactor = Math.sin((index + 1) * 0.85 + risk) * 0.0125;
+            BigDecimal waveValue = currentNav.multiply(BigDecimal.valueOf(waveFactor));
+            BigDecimal navValue = trendValue.add(waveValue);
+
+            if (index == SEEDED_HISTORY_POINTS - 1) {
+                navValue = currentNav;
+            }
+
+            points.add(NavHistory.builder()
+                    .mutualFund(fund)
+                    .navDate(today.minusMonths(SEEDED_HISTORY_POINTS - 1L - index))
+                    .navValue(sanitizeNav(navValue))
+                    .build());
+        }
+
+        return points;
+    }
+
+    private BigDecimal sanitizeNav(BigDecimal value) {
+        if (value == null) {
+            return null;
+        }
+
+        BigDecimal scaled = value.setScale(4, RoundingMode.HALF_UP);
+        return scaled.max(MIN_NAV_VALUE);
     }
 }

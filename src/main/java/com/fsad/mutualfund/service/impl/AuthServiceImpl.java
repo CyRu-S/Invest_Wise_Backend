@@ -41,6 +41,10 @@ public class AuthServiceImpl implements AuthService {
         User user = userRepository.findByEmail(request.getEmail())
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + request.getEmail()));
 
+        if (user.isSuspended()) {
+            throw new RuntimeException("This account has been suspended. Contact support or an administrator.");
+        }
+
         if (user.getPassword() == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
         }
@@ -104,6 +108,10 @@ public class AuthServiceImpl implements AuthService {
             createRoleProfile(newUser, User.Role.INVESTOR);
             return newUser;
         });
+
+        if (user.isSuspended()) {
+            throw new RuntimeException("This account has been suspended. Contact support or an administrator.");
+        }
 
         String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name(), user.getId());
         return buildAuthResponse(user, token);
