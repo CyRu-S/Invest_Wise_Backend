@@ -95,19 +95,21 @@ public class TransactionController {
     private Map<String, Object> toTransactionMap(Transaction tx) {
         MutualFund fund = resolveFund(tx.getReferenceId());
         String category = mapCategory(tx, fund);
-        String cashflowType = mapCashflowType(tx.getType());
+        String cashflowType = mapCashflowType(tx);
+        String balanceDirection = mapBalanceDirection(tx);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("id", tx.getId());
         payload.put("type", tx.getType().name());
         payload.put("cashflowType", cashflowType);
+        payload.put("balanceDirection", balanceDirection);
         payload.put("category", category);
         payload.put("amount", tx.getAmount());
         payload.put("status", tx.getStatus().name());
         payload.put("description", tx.getDescription() != null ? tx.getDescription() : "");
         payload.put("createdAt", tx.getCreatedAt().toString());
         payload.put("referenceId", tx.getReferenceId() != null ? tx.getReferenceId() : "");
-        payload.put("title", mapTitle(tx.getType()));
+        payload.put("title", mapTitle(tx));
         payload.put("fundName", fund != null ? fund.getFundName() : "");
         payload.put("tickerSymbol", fund != null ? fund.getTickerSymbol() : "");
         return payload;
@@ -126,14 +128,29 @@ public class TransactionController {
         }
     }
 
-    private String mapCashflowType(Transaction.TransactionType type) {
-        return switch (type) {
+    private String mapCashflowType(Transaction tx) {
+        if (isAdvisorRefund(tx)) {
+            return "REFUND";
+        }
+
+        return switch (tx.getType()) {
             case DEPOSIT, SELL -> "INCOME";
             case BUY, FEE_PAYMENT -> "EXPENSE";
         };
     }
 
+    private String mapBalanceDirection(Transaction tx) {
+        return switch (tx.getType()) {
+            case DEPOSIT, SELL -> "CREDIT";
+            case BUY, FEE_PAYMENT -> "DEBIT";
+        };
+    }
+
     private String mapCategory(Transaction tx, MutualFund fund) {
+        if (isAdvisorRefund(tx)) {
+            return "Advisor Refunds";
+        }
+
         return switch (tx.getType()) {
             case DEPOSIT -> "Wallet Funding";
             case BUY -> fund != null ? fund.getCategory().name() + " Investment" : "Investment";
@@ -142,12 +159,24 @@ public class TransactionController {
         };
     }
 
-    private String mapTitle(Transaction.TransactionType type) {
-        return switch (type) {
+    private String mapTitle(Transaction tx) {
+        if (isAdvisorRefund(tx)) {
+            return "Advisor Refund";
+        }
+
+        return switch (tx.getType()) {
             case DEPOSIT -> "Wallet Top-up";
             case BUY -> "Fund Purchase";
             case SELL -> "Fund Redemption";
             case FEE_PAYMENT -> "Advisor Fee";
         };
+    }
+
+    private boolean isAdvisorRefund(Transaction tx) {
+        return tx.getType() == Transaction.TransactionType.DEPOSIT
+                && tx.getReferenceId() != null
+                && tx.getReferenceId().startsWith("APPOINTMENT-")
+                && tx.getDescription() != null
+                && tx.getDescription().toLowerCase().contains("refund");
     }
 }
