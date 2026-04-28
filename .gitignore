@@ -1,0 +1,33 @@
+# Node
+node_modules/
+dist/
+build/
+.env
+.env.local
+client_secret*.json
+
+# Java / Maven
+target/
+*.jar
+*.war
+*.class
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local backend helper config
+backend/local-env.ps1

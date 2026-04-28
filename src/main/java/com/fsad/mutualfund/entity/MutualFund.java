@@ -23,6 +23,9 @@ public class MutualFund {
     @Column(name = "ticker_symbol", unique = true, nullable = false, length = 10)
     private String tickerSymbol;
 
+    @Column(name = "external_scheme_code", unique = true, length = 20)
+    private String externalSchemeCode;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
     private Category category;
@@ -54,6 +57,6 @@ public class MutualFund {
     }
 
     public enum Category {
-        EQUITY, DEBT, HYBRID, ELSS
+        EQUITY, DEBT, HYBRID, ELSS, OTHER
     }
 }

@@ -12,12 +12,16 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class FundResponse {
     private Long id;
+    private String schemeCode;
     private String fundName;
     private String tickerSymbol;
     private String category;
     private BigDecimal expenseRatio;
     private int riskRating;
     private BigDecimal currentNav;
+    private BigDecimal oneYearReturn;
+    private String navDate;
+    private String fundHouse;
     private String fundManager;
     private String description;
     private BigDecimal minInvestment;

@@ -13,6 +13,10 @@ public class RegisterRequest {
     @Size(min = 6, message = "Password must be at least 6 characters")
     private String password;
 
+    @NotBlank(message = "Confirm password is required")
+    @Size(min = 6, message = "Confirm password must be at least 6 characters")
+    private String confirmPassword;
+
     @NotBlank(message = "Full name is required")
     private String fullName;
 

@@ -17,5 +17,9 @@ public interface MutualFundRepository extends JpaRepository<MutualFund, Long> {
 
     Optional<MutualFund> findByTickerSymbol(String tickerSymbol);
 
+    Optional<MutualFund> findByFundName(String fundName);
+
+    Optional<MutualFund> findByExternalSchemeCode(String externalSchemeCode);
+
     boolean existsByFundName(String fundName);
 }

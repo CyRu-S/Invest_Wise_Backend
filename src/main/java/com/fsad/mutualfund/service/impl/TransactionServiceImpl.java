@@ -3,6 +3,7 @@ package com.fsad.mutualfund.service.impl;
 import com.fsad.mutualfund.dto.TransactionRequest;
 import com.fsad.mutualfund.entity.*;
 import com.fsad.mutualfund.repository.*;
+import com.fsad.mutualfund.service.ExternalMfService;
 import com.fsad.mutualfund.service.TransactionService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,17 +20,20 @@ public class TransactionServiceImpl implements TransactionService {
     private final MutualFundRepository fundRepository;
     private final PortfolioHoldingRepository holdingRepository;
     private final UserRepository userRepository;
+    private final ExternalMfService externalMfService;
 
     public TransactionServiceImpl(TransactionRepository transactionRepository,
                                   InvestorProfileRepository investorProfileRepository,
                                   MutualFundRepository fundRepository,
                                   PortfolioHoldingRepository holdingRepository,
-                                  UserRepository userRepository) {
+                                  UserRepository userRepository,
+                                  ExternalMfService externalMfService) {
         this.transactionRepository = transactionRepository;
         this.investorProfileRepository = investorProfileRepository;
         this.fundRepository = fundRepository;
         this.holdingRepository = holdingRepository;
         this.userRepository = userRepository;
+        this.externalMfService = externalMfService;
     }
 
     @Override
@@ -44,6 +48,7 @@ public class TransactionServiceImpl implements TransactionService {
         MutualFund fund = fundRepository.findById(request.getFundId())
                 .orElseThrow(() -> new RuntimeException("Fund not found"));
 
+        fund = refreshIfExternal(fund);
         BigDecimal amount = request.getAmount();
 
         // Check wallet balance
@@ -110,6 +115,7 @@ public class TransactionServiceImpl implements TransactionService {
                 .findByInvestorIdAndMutualFundId(userId, fund.getId())
                 .orElseThrow(() -> new RuntimeException("No holdings found for this fund"));
 
+        fund = refreshIfExternal(fund);
         BigDecimal amount = request.getAmount();
         BigDecimal nav = fund.getCurrentNav();
         BigDecimal unitsToSell = amount.divide(nav, 4, RoundingMode.HALF_UP);
@@ -151,6 +157,20 @@ public class TransactionServiceImpl implements TransactionService {
 
     @Override
     public List<PortfolioHolding> getPortfolio(Long userId) {
-        return holdingRepository.findByInvestorId(userId);
+        List<PortfolioHolding> holdings = holdingRepository.findByInvestorId(userId);
+        holdings.forEach(holding -> {
+            MutualFund fund = holding.getMutualFund();
+            if (fund != null) {
+                holding.setMutualFund(refreshIfExternal(fund));
+            }
+        });
+        return holdings;
+    }
+
+    private MutualFund refreshIfExternal(MutualFund fund) {
+        if (fund == null || fund.getExternalSchemeCode() == null || fund.getExternalSchemeCode().isBlank()) {
+            return fund;
+        }
+        return externalMfService.refreshTrackedFund(fund.getExternalSchemeCode());
     }
 }
